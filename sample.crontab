@@ -1,0 +1,4 @@
+* * * 			bash -c 'echo "-> this message is shown on any block: $LOCAL_SLOT"'
+*/10 * * 		bash -c 'echo "-> this message is shwon every ten blocks: $LOCAL_SLOT"'
+0 * *			bash -c 'echo "-> this message is shwon when a session begins: $LOCAL_SESSION"'
+0 0 *			bash -c 'echo "-> this message is shown when an era begins: $CURRENT_ERA"'
