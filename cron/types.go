@@ -1,7 +1,7 @@
 package cron
 
 import (
-	"github.com/PolkaFoundry/go-substrate-rpc-client/v3/types"
+	"github.com/centrifuge/go-substrate-rpc-client/v3/types"
 )
 
 type BabeEpochConfiguration struct {

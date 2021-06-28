@@ -2,8 +2,10 @@ package cron
 
 import (
 	"fmt"
-	gsrpc "github.com/PolkaFoundry/go-substrate-rpc-client/v3"
-	"github.com/PolkaFoundry/go-substrate-rpc-client/v3/types"
+	"math"
+
+	gsrpc "github.com/centrifuge/go-substrate-rpc-client/v3"
+	"github.com/centrifuge/go-substrate-rpc-client/v3/types"
 )
 
 type SubstrateUtils struct {
@@ -15,11 +17,12 @@ type SessionInfo struct{
 	Config struct {
 		GenesisSlot uint64
 		Duration uint64
-		SessionsPerEra uint32
+		SessionsPerEra uint64
 	}
+
 	CurrentSlot uint64
-	CurrentIndex uint32
-	CurrentEra uint32
+	CurrentIndex uint64
+	CurrentEra uint64
 	CurrentStart uint64
 }
 
@@ -38,6 +41,16 @@ func NewSubstrateUtils(url string) (*SubstrateUtils, error) {
 		meta,
 		gsrpc.SubstrateAPI(*api),
 	}, nil
+}
+
+func (api *SubstrateUtils) Reconnect() (error) {
+	newapi, err := NewSubstrateUtils(api.Client.URL())
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	api = newapi
+	return nil
 }
 
 
@@ -92,6 +105,7 @@ func (api *SubstrateUtils) GetStorage(module string, method string,  arg1 []byte
 	return nil
 }
 
+
 func (api *SubstrateUtils) GetSessionInfo() (*SessionInfo, error) {
 	var GenesisSlot types.U64
 	err := api.GetStorage("Babe", "GenesisSlot", nil, nil, &GenesisSlot)
@@ -138,13 +152,25 @@ func (api *SubstrateUtils) GetSessionInfo() (*SessionInfo, error) {
 
 	info := &SessionInfo{
 		CurrentSlot: uint64(CurrentSlot),
-		CurrentIndex: uint32(CurrentIndex),
-		CurrentEra: uint32(CurrentEra),
+		CurrentIndex: uint64(CurrentIndex),
+		CurrentEra: uint64(CurrentEra),
 		CurrentStart: uint64(EpochStart[1]),
 	}
 	info.Config.GenesisSlot = uint64(GenesisSlot)
 	info.Config.Duration = uint64(EpochDuration)
-	info.Config.SessionsPerEra = uint32(SessionsIndex)
+	info.Config.SessionsPerEra = uint64(SessionsIndex)
 
 	return info, nil
+}
+
+func (info *SessionInfo) GetLocalSlot() uint64 {
+	return (info.CurrentSlot - info.Config.GenesisSlot - info.CurrentIndex * info.Config.Duration)
+}
+
+func (info *SessionInfo) GetLocalSession() uint64 {
+	return uint64(math.Mod(float64(info.CurrentIndex), float64(info.Config.SessionsPerEra)))
+}
+
+func (info *SessionInfo) GetCurrentEra() uint64 {
+	return uint64(info.CurrentEra)
 }

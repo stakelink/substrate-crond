@@ -6,8 +6,7 @@ import (
 	"bufio"
 	"math"
 	"os/exec"
-
-	"github.com/PolkaFoundry/go-substrate-rpc-client/v3/types"
+	"time"
 )
 
 type Cron struct {
@@ -40,18 +39,31 @@ type Schedule struct {
 	Job *ScheduleJob
 }
 
-func New(RPC_URL string) (*Cron, error) {
-	api, err := NewSubstrateUtils(RPC_URL)
+func New(rpc_url string) (*Cron, error) {
+	c := &Cron{
+		parser:    standardParser,
+		schedules:   nil,
+	}
+
+	err := c.Init(rpc_url)
 	if err != nil {
 		return nil, err
 	}
 
-	c := &Cron{
-		parser:    standardParser,
-		schedules:   nil,
-		api: api,
-	}
 	return c, nil
+}
+
+func (c *Cron) Init(rpc_url string) (error) {
+	fmt.Println("INIT", rpc_url)
+	
+	api, err := NewSubstrateUtils(rpc_url)
+	if err != nil {
+		return err
+	}
+
+	c.api = api
+	
+	return nil
 }
 
 func (c *Cron) LoadCrontab(filename string) error {
@@ -91,7 +103,7 @@ func (c *Cron) LoadSchedule(schedule *Schedule) {
 	c.schedules = append(c.schedules, schedule)
 }
 
-func (c *Cron) RunJobs(LocalSlot, LocalSession, CurrentEra uint64) {
+func (c *Cron) RunJobs(LocalSlot, LocalSession, CurrentEra, BlockNumber uint64) {
 	for _,schedule := range c.schedules {
 		if (matchTrigger(LocalSlot, schedule.Slot) && matchTrigger(LocalSession, schedule.Session) && matchTrigger(CurrentEra, schedule.Era)) {
 			cmd := exec.Command(schedule.Job.Exec, schedule.Job.Args...)
@@ -100,6 +112,7 @@ func (c *Cron) RunJobs(LocalSlot, LocalSession, CurrentEra uint64) {
 				fmt.Sprintf("LOCAL_SLOT=%d", LocalSlot),
 				fmt.Sprintf("LOCAL_SESSION=%d", LocalSession),
 				fmt.Sprintf("CURRENT_ERA=%d", CurrentEra),
+				fmt.Sprintf("BLOCK_NUMBER=%d", BlockNumber),
 			)
 			go cmd.Run()
 		}
@@ -118,79 +131,66 @@ func (c *Cron) RunJob(schedule *Schedule) {
 }	
 
 func (c *Cron) Run() (error) {
-	fmt.Println("Run!")
-
-	info, err := c.api.GetSessionInfo()
-	if err != nil {
-		return err
-	}
-
-	key, err := types.CreateStorageKey(c.api.meta, "System", "Events", nil, nil)
-	if err != nil {
-		return err
-	}
-
-	sub_events, err := c.api.RPC.State.SubscribeStorageRaw([]types.StorageKey{key})
-	if err != nil {
-		return err
-	}
-	defer sub_events.Unsubscribe()	
+	fmt.Println("RUN!")
 
 	sub_heads, err := c.api.RPC.Chain.SubscribeNewHeads()
 	if err != nil {
 		return err
 	}
-	defer sub_heads.Unsubscribe()
 
 	LatestBlockNumber := uint64(0)
+	timeoutCount := 0
+
+	fmt.Println("LOOP")
 	for {
-		head := <-sub_heads.Chan()
-		if !(uint64(head.Number) > LatestBlockNumber) {
-			continue
-		}
-		LatestBlockNumber = uint64(head.Number)
-
-		set := <-sub_events.Chan()
-
-		for _, chng := range set.Changes {
-			if !types.Eq(chng.StorageKey, key) || !chng.HasStorageData {
-				continue
-			}
-
-			events := types.EventRecords{}
-			types.EventRecordsRaw(chng.StorageData).DecodeEventRecords(c.api.meta, &events)
-			if err != nil {
-				continue
-			}
-		
-			if len(events.Session_NewSession) > 0 {
-				info, err = c.api.GetSessionInfo()
+		if timeoutCount > 20 {
+			err = c.Init(c.api.Client.URL())
+			if err == nil {
+				sub_heads, err = c.api.RPC.Chain.SubscribeNewHeads()
 				if err != nil {
 					return err
-				}					
+				}
+
+				timeoutCount = 0
+			} else {
+				time.Sleep(5 * time.Second)
+				continue
 			}
 		}
+		select {
+			case head := <-sub_heads.Chan():
+				timeoutCount = 0
+				if (uint64(head.Number) > LatestBlockNumber) {
+					block, err := c.api.RPC.Chain.GetBlockLatest()
+					if err != nil {
+						break
+					}
+					LatestBlockNumber = uint64(block.Block.Header.Number)
 
-		if (uint64(head.Number) > info.CurrentStart + info.Config.Duration) {
-			info, err = c.api.GetSessionInfo()
-			if err != nil {
-				return err
-			}			
-		}
-		LocalSlot := uint64(head.Number) - info.CurrentStart
-		LocalSession := math.Mod(float64(info.CurrentIndex), float64(info.Config.SessionsPerEra))
+					info, err := c.api.GetSessionInfo()
+					if err != nil {
+						break
+					}
 
-		SessionPercentage := float64(LocalSlot)/float64(info.Config.Duration)
-		EraPercentage := (LocalSession * float64(info.Config.Duration) + float64(LocalSlot))/(float64(info.Config.SessionsPerEra)*(float64(info.Config.Duration)))
+					c.RunJobs(info.GetLocalSlot(),  info.GetLocalSession(),  info.GetCurrentEra(), LatestBlockNumber)
+				}
+			case err := <-sub_heads.Err():
+				fmt.Println("ERROR", err)
+			case <-time.After(1 * time.Second):
+				fmt.Println("TIMEOUT", timeoutCount)
+				timeoutCount += 1	
+		}		
+	} 
 
-		_ = SessionPercentage
-		_ = EraPercentage
-
-		c.RunJobs(LocalSlot, uint64(LocalSession), uint64(info.CurrentEra))
-	}
+	return err		
+} 
+/*
+func (c *Cron) connectAndSubscribe(url string) (error {
+	api, err = NewSubstrateUtils(url)
+	c.api = api
 
 }
-
+*/
 
 func matchTrigger(value uint64, trigger *ScheduleTrigger) (bool) {
 	match := false

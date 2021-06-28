@@ -20,9 +20,7 @@ func Run(ctx *cli.Context) error {
 		return err
 	}
 
-	c.Run()
-
-    return nil
+  return c.Run()
 }
 
 func main() {
